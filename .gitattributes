@@ -1,3 +1,6 @@
 
 # Frozen source oracles retain upstream whitespace for exact guard comparisons.
 tests/portable_rx/fixtures/*.cpp -whitespace
+
+# Preserve the corresponding upstream Bluetooth source snapshot verbatim.
+extras/bluetooth/BlueToolFixup-mask-fix2/** -whitespace

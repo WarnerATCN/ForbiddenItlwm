@@ -15,7 +15,7 @@
 
 本包只针对 **Intel Mac / 黑苹果 x86_64、macOS Tahoe** 构建，已实测 macOS **26.7.2（25G332）、Intel Wi-Fi PCI 8086:7A70（AX211）**。其他系统版本或网卡没有由本次测试认证；Sequoia/Sonoma 不应直接使用这个 Tahoe 包。
 
-需要可用的 OpenCore、系统原生 IO80211Family/IOSkywalkFamily、正常的 Intel Wi-Fi DMA 映射，以及已经适配当前系统的蓝牙 BLE 广播/扫描方案。**蓝牙 Kext 不在本包内**；本机使用的定制 BlueToolFixup 与上游 BTLEAdvFixup 是不同方案，不能混用。完整条件见部署文档。
+需要可用的 OpenCore、系统原生 IO80211Family/IOSkywalkFamily、正常的 Intel Wi-Fi DMA 映射，以及已经适配当前系统的蓝牙 BLE 广播/扫描方案。**蓝牙 Kext 不在 Wi-Fi ZIP 内，同页现已提供独立蓝牙配套包**；本机使用的定制 BlueToolFixup 与上游 BTLEAdvFixup 是不同方案，不能混用。完整条件见部署文档。
 
 ### OpenCore 安装步骤
 
@@ -47,9 +47,22 @@ sysctl debug.forbidden_awdl_control_rx debug.forbidden_awdl_control_peer debug.f
 
 若偶发看不到本机，可尝试在本机 Finder 把“不允许任何人”切回“所有人”；这只是临时恢复。若无法正常启动或 Wi-Fi 异常，从备份 EFI 启动并恢复旧 Wi-Fi Kext、Kernel/Add 和原 Wi-Fi 参数。无需更改无关蓝牙、账户或 SMBIOS。
 
+## AX211 蓝牙配套包
+
+现补充发布本机已实测的蓝牙组合，Wi-Fi ZIP 和已验证二进制不变：
+
+- [蓝牙 Kext 包：AX211-Bluetooth-Tahoe-25G332-mask-fix2.zip](https://github.com/WarnerATCN/ForbiddenItlwm/releases/download/portable-rx-p1-25G332/AX211-Bluetooth-Tahoe-25G332-mask-fix2.zip)
+- [对应源码包：AX211-Bluetooth-Sources-mask-fix2.zip](https://github.com/WarnerATCN/ForbiddenItlwm/releases/download/portable-rx-p1-25G332/AX211-Bluetooth-Sources-mask-fix2.zip)
+- [蓝牙包 SHA-256 清单](https://github.com/WarnerATCN/ForbiddenItlwm/releases/download/portable-rx-p1-25G332/Bluetooth-SHA256SUMS.txt)
+- [蓝牙安装、来源及完整使用说明](https://github.com/WarnerATCN/ForbiddenItlwm/blob/awdl-portable-rx-p1/docs/AX211-BLUETOOTH.zh-CN.md)
+
+包含 Lilu 1.7.2 RELEASE、IntelBluetoothFirmware 2.5.2、IntelBTPatcher 2.5.2、BlueToolFixup 2.7.3 **Tahoe-mask-fix2 定制版**。Intel 两个组件与上游原包一致；本地修改的是 BlueToolFixup 的 Tahoe 相对位移匹配和 Lilu 查找字节规范化。四个 UUID 均与本机当前加载版本一致，具体文件哈希见包内 manifest。
+
+本套需添加 `-btlfxadvsets`，Lilu 先于插件、IntelBluetoothFirmware 先于 IntelBTPatcher 加载；保留 IntelBTPatcher，停用 BTLEAdvFixup，不混入 `-btleadv`，Tahoe 不加载旧 IntelBluetoothInjector。已验证 macOS26.7.2/25G332、AX211；其他 build/控制器未认证。蓝牙包不等于发现故障修复，也不是可直接替换整机 EFI 的套件。
+
 ## 内容
 
-- 本期Wi-Fi驱动 `ForbiddenItlwm.kext`，不含个人EFI或蓝牙Kext。
+- Wi-Fi ZIP：本期驱动 `ForbiddenItlwm.kext`；蓝牙为独立配套 ZIP。均不含个人EFI。
 - 默认：短TCP接收窗口1、短控制对端实验0、单帧legacy策略1、空闲接收对端接替1。
 - 保留区域合法性约束，整合44回退与宽带边界保护；不伪造国家、不放宽固件信道权限。
 - 本分支README、部署参数、验证方法及去标识化结果摘要。

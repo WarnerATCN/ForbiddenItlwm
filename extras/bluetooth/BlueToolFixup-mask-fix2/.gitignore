@@ -1,0 +1,6 @@
+build/
+MacKernelSDK/
+Lilu.kext/
+xcuserdata/
+project.xcworkspace/
+.DS_Store

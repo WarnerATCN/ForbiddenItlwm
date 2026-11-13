@@ -53,7 +53,7 @@
 
 ## 部署与参数
 
-完整条件、OpenCore步骤、回滚和蓝牙方案区别见[部署文档](docs/PORTABLE-RX-INSTALL.zh-CN.md)。本分支只提供Wi-Fi驱动，不包含个人EFI、账户信息、原始日志或抓包。
+完整条件、OpenCore步骤、回滚和蓝牙方案区别见[部署文档](docs/PORTABLE-RX-INSTALL.zh-CN.md)。Wi-Fi ZIP 提供 Wi-Fi 驱动；另提供[AX211 蓝牙配套包及说明](docs/AX211-BLUETOOTH.zh-CN.md)，包含本机实测的 Lilu、IntelBluetoothFirmware、IntelBTPatcher 和定制 BlueToolFixup。所有公开包均不包含个人EFI、账户信息、原始日志或抓包。
 
 本期Wi-Fi启动参数：
 

@@ -1,0 +1,109 @@
+--- a/BrcmPatchRAM/BlueToolFixup.cpp
++++ b/BrcmPatchRAM/BlueToolFixup.cpp
+@@ -289,6 +289,22 @@
+     0x0F, 0x1F, 0x40, 0x00
+ };
+ 
++// RIP-relative data/call displacements move between Tahoe point releases.
++// Match the instruction sequence, then replace only the intended operation;
++// never copy the 26.4.1 relative addresses into another bluetoothd build.
++static const uint8_t kLeEventMaskFindMask26[] =
++{
++    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
++    0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
++    0xFF, 0xFF, 0xFF, 0xFF
++};
++static const uint8_t kLeEventMaskReplaceMask26[] =
++{
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0xFF, 0xFF, 0xFF, 0xFF
++};
++
+ // Advertising set random address (0x10050ef2e on 26.4.1): for chipset <= 3 bluetoothd turns
+ // off LE Set Advertising Set Random Address, then enables sets whose own address type is
+ // random, which the controller rejects with Invalid HCI Command Parameters (0x12).
+@@ -307,6 +323,16 @@
+     0xEB, 0x07,
+     0x31, 0xFF, 0xE8, 0xA2, 0x7D, 0xCE, 0xFF
+ };
++static const uint8_t kAdvSetAddrFindMask26[] =
++{
++    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
++    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00
++};
++static const uint8_t kAdvSetAddrReplaceMask26[] =
++{
++    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
++    0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
++};
+ 
+ // LE Extended Create Connection (0x10050eb5c on 26.4.1). With extended scanning on, the
+ // controller rejects legacy LE Create Connection (0x200d) with Command Disallowed, and after
+@@ -323,6 +349,16 @@
+ {
+     0xBF, 0x01, 0x00, 0x00, 0x00, 0x66, 0x90,
+     0xE8, 0x2F, 0xB0, 0xCF, 0xFF
++};
++static const uint8_t kExtCreateConnFindMask26[] =
++{
++    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
++    0xFF, 0x00, 0x00, 0x00, 0x00
++};
++static const uint8_t kExtCreateConnReplaceMask26[] =
++{
++    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
++    0x00, 0x00, 0x00, 0x00, 0x00
+ };
+ 
+ // Advertising set random address before every enable (0x1001f951b on 26.4.1). bluetoothd
+@@ -376,6 +412,20 @@
+ };
+ 
+ static mach_vm_address_t orig_cs_validate {};
++
++// Lilu findPattern compares (data & mask) with the UNMASKED needle.
++// A wildcard in the mask therefore requires a zero byte in the needle too.
++// Keep the documented original arrays intact and normalize a private copy.
++template <size_t N>
++static bool patchAdvsetsMasked(const void *data, size_t size,
++    const uint8_t (&find)[N], const uint8_t (&findMask)[N],
++    const uint8_t (&replace)[N], const uint8_t (&replaceMask)[N]) {
++    uint8_t needle[N];
++    for (size_t i = 0; i < N; i++)
++        needle[i] = find[i] & findMask[i];
++    return KernelPatcher::findAndReplaceWithMask(const_cast<void *>(data), size,
++        needle, N, findMask, N, replace, N, replaceMask, N);
++}
+ 
+ #pragma mark - Kernel patching code
+ 
+@@ -466,13 +516,16 @@
+                 KernelPatcher::findAndReplace(const_cast<void *>(data), PAGE_SIZE, kExtScanCapOriginal26, sizeof(kExtScanCapOriginal26), kSpecAdvSetsCapPatched26, sizeof(kSpecAdvSetsCapPatched26)))
+                 SYSLOG(MODULE_SHORT, "[advsets] patched extended scanning capability in %s", path);
+             if (shouldPatchSpecAdvSets &&
+-                KernelPatcher::findAndReplace(const_cast<void *>(data), PAGE_SIZE, kLeEventMaskOriginal26, sizeof(kLeEventMaskOriginal26), kLeEventMaskPatched26, sizeof(kLeEventMaskPatched26)))
++                patchAdvsetsMasked(data, PAGE_SIZE, kLeEventMaskOriginal26,
++                    kLeEventMaskFindMask26, kLeEventMaskPatched26, kLeEventMaskReplaceMask26))
+                 SYSLOG(MODULE_SHORT, "[advsets] patched LE event mask in %s", path);
+             if (shouldPatchSpecAdvSets &&
+-                KernelPatcher::findAndReplace(const_cast<void *>(data), PAGE_SIZE, kAdvSetAddrOriginal26, sizeof(kAdvSetAddrOriginal26), kAdvSetAddrPatched26, sizeof(kAdvSetAddrPatched26)))
++                patchAdvsetsMasked(data, PAGE_SIZE, kAdvSetAddrOriginal26,
++                    kAdvSetAddrFindMask26, kAdvSetAddrPatched26, kAdvSetAddrReplaceMask26))
+                 SYSLOG(MODULE_SHORT, "[advsets] patched advertising set random address in %s", path);
+             if (shouldPatchSpecAdvSets &&
+-                KernelPatcher::findAndReplace(const_cast<void *>(data), PAGE_SIZE, kExtCreateConnOriginal26, sizeof(kExtCreateConnOriginal26), kExtCreateConnPatched26, sizeof(kExtCreateConnPatched26)))
++                patchAdvsetsMasked(data, PAGE_SIZE, kExtCreateConnOriginal26,
++                    kExtCreateConnFindMask26, kExtCreateConnPatched26, kExtCreateConnReplaceMask26))
+                 SYSLOG(MODULE_SHORT, "[advsets] patched extended create connection in %s", path);
+             if (shouldPatchSpecAdvSets &&
+                 KernelPatcher::findAndReplace(const_cast<void *>(data), PAGE_SIZE, kAdvSetAddrResendOriginal26, sizeof(kAdvSetAddrResendOriginal26), kAdvSetAddrResendPatched26, sizeof(kAdvSetAddrResendPatched26)))
+@@ -511,7 +564,7 @@
+         shouldPatchA2DPCheck = checkKernelArgument("-btlfxa2dpcheck");
+         shouldPatchSpecAdvSets = checkKernelArgument("-btlfxadvsets");
+         if (shouldPatchSpecAdvSets)
+-            SYSLOG(MODULE_SHORT, "[advsets] BT Spec LE advertising sets for third-party controllers enabled");
++            SYSLOG(MODULE_SHORT, "[advsets] Tahoe-mask-fix2: normalized Lilu masked needles; BT Spec LE advertising sets enabled");
+         if (shouldPatchA2DPCheck)
+             SYSLOG(MODULE_SHORT, "[a2dpcheck] bluetoothd Read Clock workaround enabled (fast-connect A2DP bypass)");
+         KernelPatcher::RouteRequest csRoute = KernelPatcher::RouteRequest("_cs_validate_page", patched_cs_validate_page, orig_cs_validate);
