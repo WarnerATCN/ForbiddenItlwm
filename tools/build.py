@@ -12,7 +12,7 @@ R=Path(__file__).resolve().parents[1]
 NAME='ForbiddenItlwm';ID='org.forbiddenitlwm.ForbiddenItlwm';VER='0.5.0'
 # Per macOS target: the IO80211 header set, the build marker, and which version header directory stays off the quote path.
 TARGETS={
-    'tahoe':dict(io80211='__MAC_26_0',marker='forbidden-0.5.0-test1',skip=('macOS15','macOS14')),
+    'tahoe':dict(io80211='__MAC_26_0',marker='forbidden-portable-rx-p1',skip=('macOS15','macOS14')),
     'sequoia':dict(io80211='__MAC_15_2',marker='forbidden-0.5.0-test1-sequoia',skip=('macOS15','macOS26','macOS14')),
     # Sonoma 14.4 and later: IO80211FamilyV2 without WCL, as upstream's AirportItlwm-Sonoma14.4 target.
     'sonoma':dict(io80211='__MAC_14_4',marker='forbidden-0.5.0-test1-sonoma',skip=('macOS15','macOS26','macOS14'),wcl=False),
@@ -62,7 +62,7 @@ __attribute__((visibility("hidden"))) int _kext_apple_cc=__APPLE_CC__;
         # The inherited driver stays at -w. This project's own files get warnings, and
         # the two classes that hide memory bugs (sign mixing, uninitialised reads) fail the build.
         if src.is_relative_to(R/'ForbiddenItlwm'):extra+=PROJECT_WARNINGS
-        cmd=base+extra
+        cmd=base+extra+['-MD','-Xclang','-sys-header-deps','-MF',str(o.with_suffix('.d'))]
         if PROJECT_WARNINGS[0] in extra:cmd=[x for x in cmd if x!='-w']
         r=subprocess.run(cmd+['-c',str(src),'-o',str(o)],capture_output=True,text=True)
         if not r.returncode and r.stderr.strip():print(f'--- warnings in {src.relative_to(R)}\n{r.stderr[-3000:]}')

@@ -1,0 +1,105 @@
+{
+  "version": "forbidden-portable-rx-p1",
+  "baseProject": "retropineaple/ForbiddenItlwm",
+  "baseCommit": "aa707a7afcd4eda793e0d9ffa7ee7d515cb2294e",
+  "binaryUUID": "09066205-14A9-3002-86AB-89ED5A03DC7D",
+  "binarySHA256": "6fb37220dd18c20911ae55150633c84745330955645cd365d90a5c835a0be482",
+  "status": "frozen candidate; final discovery acceptance failed; user deferred discovery repair",
+  "testsDate": "2026-11-13",
+  "validatedHostOS": "26.7.2 (25G332)",
+  "validatedIntelPCI": "8086:7A70",
+  "defaults": {
+    "control_rx": 1,
+    "control_peer": 0,
+    "single_legacy": 1,
+    "peer_handoff": 1
+  },
+  "referenceFileBytes": 247636698,
+  "referenceSHA256": "a31d673c39851f0f6eb3fa53f2570cd06182b402d414e0d5716fab8b96296159",
+  "results": [
+    {
+      "condition": "AP149/AWDL149 with capture",
+      "direction": "local-to-iPhone",
+      "phaseSeconds": 8.053,
+      "decimalMBps": 30.750862784055627,
+      "AWDLFullFileByteEvidence": true,
+      "userConfirmedComplete": true,
+      "incomingSHA256Matches": null
+    },
+    {
+      "condition": "AP149/AWDL149 with capture",
+      "direction": "iPhone-to-local",
+      "phaseSeconds": 7.793,
+      "decimalMBps": 31.77681226741948,
+      "AWDLFullFileByteEvidence": true,
+      "userConfirmedComplete": true,
+      "incomingSHA256Matches": true
+    },
+    {
+      "condition": "AP149/AWDL149 with capture",
+      "direction": "native-Mac-to-local",
+      "phaseSeconds": 11.946,
+      "decimalMBps": 20.729675037669512,
+      "AWDLFullFileByteEvidence": true,
+      "userConfirmedComplete": true,
+      "incomingSHA256Matches": true
+    },
+    {
+      "condition": "AP149/AWDL149 with capture",
+      "direction": "local-to-native-Mac",
+      "phaseSeconds": 14.665,
+      "decimalMBps": 16.886239209001022,
+      "AWDLFullFileByteEvidence": true,
+      "userConfirmedComplete": true,
+      "incomingSHA256Matches": null
+    },
+    {
+      "condition": "AP36/AWDL149 no BPF; phone disconnected from AP",
+      "direction": "local-to-iPhone",
+      "phaseSeconds": 34.274,
+      "decimalMBps": 7.22520563692595,
+      "AWDLFullFileByteEvidence": true,
+      "userConfirmedComplete": true,
+      "incomingSHA256Matches": null
+    },
+    {
+      "condition": "AP36/AWDL149 no BPF; phone disconnected from AP",
+      "direction": "iPhone-to-local",
+      "phaseSeconds": 11.197,
+      "decimalMBps": 22.116343484862018,
+      "AWDLFullFileByteEvidence": true,
+      "userConfirmedComplete": true,
+      "incomingSHA256Matches": true
+    },
+    {
+      "condition": "AP149 normal associated Wi-Fi LAN; not AWDL speed evidence",
+      "direction": "local-to-iPhone",
+      "phaseSeconds": 13.297,
+      "decimalMBps": 18.623501391291267,
+      "AWDLFullFileByteEvidence": false,
+      "userConfirmedComplete": true,
+      "incomingSHA256Matches": null
+    },
+    {
+      "condition": "AP149/AWDL149 no BPF; phone disconnected from AP",
+      "direction": "local-to-iPhone",
+      "phaseSeconds": 8.413,
+      "decimalMBps": 29.435005111137524,
+      "AWDLFullFileByteEvidence": true,
+      "userConfirmedComplete": true,
+      "incomingSHA256Matches": null
+    }
+  ],
+  "idle": {
+    "seconds": 601.28,
+    "listenerSamples": 276,
+    "listenerPresentSamples": 276,
+    "finalNativeFinderReopenVisible": false
+  },
+  "limitations": [
+    "Discovery still intermittently fails after native Finder reopen.",
+    "Two usable same-name entries may occur.",
+    "AP36/AWDL149 sending can wait for aggregation negotiation.",
+    "Other-country44/80+80 hardware not field tested."
+  ]
+}
