@@ -4,6 +4,8 @@
 
 **当前是带已知问题的候选版，不是稳定版。** 文件互传和速度优化已经落地；原生 Mac 关闭重开 Finder 后偶发完全看不到本机的问题仍未修复。本期保留当前版本，发现故障与跨信道发送等待留到后续迭代。
 
+下载已编译驱动请进入 **[Release 发布页](https://github.com/WarnerATCN/ForbiddenItlwm/releases/tag/portable-rx-p1-25G332)**，选择 `ForbiddenItlwm-portable-rx-p1-Tahoe-25G332.zip`。安装包内含完整 Kext；发布页提供安装步骤、启动参数与回滚指引，另有独立中文安装说明。GitHub 的 Source code ZIP 仅为源码。
+
 - 本期版本标识：`forbidden-portable-rx-p1`
 - 已实测：macOS 26.7.2（25G332）、Intel Wi-Fi PCI `8086:7A70`，与同一台 iPhone、原生 Mac 互传
 - 预编译包：只针对 Tahoe x86_64；没有据此认证其他系统版本或全部 Intel 网卡

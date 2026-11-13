@@ -1,6 +1,51 @@
 # portable-rx-p1 / Tahoe 25G332 候选包
 
-基于 retropineaple/ForbiddenItlwm `aa707a7` 的本地增量版本。**发现稳定性验收未通过，按用户决定保留当前版本，发现修复留到后续；本发布应标记为 Pre-release。**
+基于 retropineaple/ForbiddenItlwm `aa707a7` 的本地增量版本。**本发布为 Pre-release：文件互传已实测可用，但发现稳定性验收未通过，修复留待后续。**
+
+## 下载与安装
+
+下载下面的预编译包即可取得 `ForbiddenItlwm.kext`，**不要把 GitHub 自动生成的 Source code ZIP 当成驱动安装包**。
+
+- [下载 Kext 安装包（约15.4 MB）](https://github.com/WarnerATCN/ForbiddenItlwm/releases/download/portable-rx-p1-25G332/ForbiddenItlwm-portable-rx-p1-Tahoe-25G332.zip)
+- [下载中文安装说明](https://github.com/WarnerATCN/ForbiddenItlwm/releases/download/portable-rx-p1-25G332/INSTALL-portable-rx-p1.zh-CN.md)
+- [下载 SHA256SUMS.txt](https://github.com/WarnerATCN/ForbiddenItlwm/releases/download/portable-rx-p1-25G332/SHA256SUMS.txt)
+- [在线阅读完整部署文档](https://github.com/WarnerATCN/ForbiddenItlwm/blob/awdl-portable-rx-p1/docs/PORTABLE-RX-INSTALL.zh-CN.md)
+
+### 安装前提
+
+本包只针对 **Intel Mac / 黑苹果 x86_64、macOS Tahoe** 构建，已实测 macOS **26.7.2（25G332）、Intel Wi-Fi PCI 8086:7A70（AX211）**。其他系统版本或网卡没有由本次测试认证；Sequoia/Sonoma 不应直接使用这个 Tahoe 包。
+
+需要可用的 OpenCore、系统原生 IO80211Family/IOSkywalkFamily、正常的 Intel Wi-Fi DMA 映射，以及已经适配当前系统的蓝牙 BLE 广播/扫描方案。**蓝牙 Kext 不在本包内**；本机使用的定制 BlueToolFixup 与上游 BTLEAdvFixup 是不同方案，不能混用。完整条件见部署文档。
+
+### OpenCore 安装步骤
+
+1. 备份完整可启动 EFI，优先用备用 USB EFI 测试；记录原 Wi-Fi 驱动和启动参数。
+2. 将安装包与 `SHA256SUMS.txt` 放在同一目录，运行 `shasum -a 256 -c SHA256SUMS.txt`，确认 ZIP 项输出 `OK`。
+3. 解压，把 **完整的** `ForbiddenItlwm.kext` 文件夹复制到 `EFI/OC/Kexts/`，不要只复制其执行文件。
+4. 在 `config.plist → Kernel → Add` 中启用该 Kext：`BundlePath=ForbiddenItlwm.kext`、`ExecutablePath=Contents/MacOS/ForbiddenItlwm`、`PlistPath=Contents/Info.plist`、`Enabled=true`、`Arch=x86_64`、`MinKernel=25.0.0`、`MaxKernel=25.99.99`。同时停用旧 AirportItlwm/itlwm，避免重复加载。
+5. 在 `NVRAM → Add → 7C436110-AB2A-4BBB-A880-FE41995C9F82 → boot-args` 中加入下列本期 Wi-Fi 参数，保留原有其他参数；蓝牙参数按自己的完整方案配置。
+6. 用匹配版本的 `ocvalidate` 检查配置，手动重启，正常连接 Wi-Fi。不要额外混入 OCLP 的旧无线栈替换补丁。
+
+```text
+-itlawdlcoexprobe -itlawdliface -itlawdlnativeup -itlawdlcoexrx -itlawdlcoextx -itlawdlcoexmulti -itlawdlcoexdata -itlawdlmitx -itlawdlelicit -itlawdlcaps -itlawdlsvcmerge -itlawdlawsync itlawdlintcoal=4 -itlawdlcoexbatx -itlawdlcoexpeerpause -itlawdlcoexbatrace itlawdltxqueue=4096 -itlawdlcoexsamechprobe
+```
+
+这是本期实测配置，包含诊断项，并非已精简的最小参数集合。四个运行默认值 `control_rx/control_peer/single_legacy/peer_handoff` 为 **1/0/1/1**，无需每次开机手动写入 sysctl。
+
+### 开始使用与核验
+
+打开 Wi-Fi 和蓝牙，正常连接网络，在 Finder 打开“隔空投送”，按需求选择接收范围；测试时可临时用“所有人”，测试后恢复自己的接收设置。手机保持亮屏解锁，分别验证发送和接收。
+
+```bash
+sw_vers -buildVersion
+kmutil showloaded --list-only | grep -E 'ForbiddenItlwm|AirportItlwm'
+ifconfig awdl0
+sysctl debug.forbidden_awdl_control_rx debug.forbidden_awdl_control_peer debug.forbidden_awdl_single_legacy debug.forbidden_awdl_peer_handoff
+```
+
+应加载 ForbiddenItlwm、存在 awdl0、四项值为1/0/1/1，且不同时加载旧 AirportItlwm。149/80 MHz 在当地允许且固件认可时有较好表现；**无需把所有国家的路由器都强制改成149**。44/6合法回退尚需更多实机验证。
+
+若偶发看不到本机，可尝试在本机 Finder 把“不允许任何人”切回“所有人”；这只是临时恢复。若无法正常启动或 Wi-Fi 异常，从备份 EFI 启动并恢复旧 Wi-Fi Kext、Kernel/Add 和原 Wi-Fi 参数。无需更改无关蓝牙、账户或 SMBIOS。
 
 ## 内容
 
