@@ -122,6 +122,7 @@
 #include <AWDLDataFrame.hpp>
 #include <AWDLRegulatory.hpp>
 #include <AWDLBlockAck.hpp>
+#include <AWDLControlReceiveProbe.hpp>
 #include <AWDLServiceMerge.hpp>
 #include <AWDLSameChannelProbe.hpp>
 
@@ -6100,6 +6101,12 @@ static ItlAWDL::BaFilterState awdlCoexBaFilter;
 static uint32_t awdlCoexDataRxRetry, awdlCoexRxModulation[8], awdlCoexRxWide80;
 // Unicast data rate for our frames: 0 legacy 24 Mbit/s, then HT MCS 4, 5, 7 (20 MHz, one stream). Steps
 // down after a window with over 20% failures, up after one with under 5%.
+// Opt-in bounded window; only successful attributed completions arm it.
+static bool awdlCoexControlRxEnabled;
+static bool awdlControlRxEnabled() { return awdlCoexControlRxEnabled; }
+static ItlAWDL::ControlReceiveProbe awdlCoexControlRxProbe;
+static bool awdlCoexSendingControlRx, awdlCoexControlRxRestorePending, awdlCoexControlRxLive;
+static uint32_t awdlCoexControlRxCompletions;
 static unsigned awdlCoexRateStep;
 static uint32_t awdlCoexRateWindowOK, awdlCoexRateWindowFailed, awdlCoexRateUps, awdlCoexRateDowns;
 // Steps 4 and 5 are VHT 80 MHz, two streams, MCS 4 and 7, only while the listener is at 80 MHz.
@@ -6339,6 +6346,7 @@ static uint32_t awdlCoexPeerSequenceRejected;
 static bool awdlCoexScheduleCalibrated;
 // Per ring slot: 1 for a group data frame, 2 for unicast, so completions say whether the peer acknowledged us.
 static uint8_t awdlCoexSlotKind[IWX_MIN_256_BA_QUEUE_SIZE_GEN3];
+static ItlAWDL::ControlReceiveTag awdlCoexSlotControlRx[IWX_MIN_256_BA_QUEUE_SIZE_GEN3];
 static uint32_t awdlCoexSlotBaPeerEpoch[nitems(awdlCoexSlotKind)];
 static uint8_t awdlCoexSlotToken[nitems(awdlCoexSlotKind)]; // Dialog token (ADDBA) or TID (DELBA) per slot.
 static uint16_t awdlCoexSlotEnqueueId[nitems(awdlCoexSlotKind)];
@@ -6401,6 +6409,22 @@ static bool awdlCoexPeerKnown(const uint8_t *addr, uint64_t nowUS, bool refresh 
     }
     return false;
 }
+static bool awdlControlRxQuiet(uint64_t now) {
+    return !awdlCoexBaTxBulk.bulk &&
+        (!awdlCoexBaTxLastAggUS || (now >= awdlCoexBaTxLastAggUS && now - awdlCoexBaTxLastAggUS >= 300000ULL)) &&
+        (!awdlCoexBaLastRxPayloadUS || (now >= awdlCoexBaLastRxPayloadUS && now - awdlCoexBaLastRxPayloadUS >= 300000ULL));
+}
+static bool awdlControlReceiveProbeWanted(struct iwx_softc *sc, uint64_t now) {
+    if (!awdlControlRxEnabled() || awdlStopping || !awdlCoexAdded || !awdlCoexMultiActive ||
+        awdlCoexFilter != 3 || awdlCoexGeneration != sc->sc_generation) return false;
+    auto *node = reinterpret_cast<struct iwx_node *>(sc->sc_ic.ic_bss);
+    const auto *station = node && node->in_phyctxt ? node->in_phyctxt->channel : nullptr;
+    const unsigned ownNumber = awdlCoexOwnChan ? ieee80211_chan2ieee(&sc->sc_ic, awdlCoexOwnChan) : 0;
+    const unsigned stationNumber = station ? ieee80211_chan2ieee(&sc->sc_ic, station) : 0;
+    return awdlCoexControlRxProbe.wants(true, awdlCoexPeerKnown(awdlCoexControlRxProbe.peer, now),
+        awdlControlRxQuiet(now), ownNumber, stationNumber, now, sc->sc_generation, awdlCoexToken);
+}
+
 static void awdlCoexPublish()
 {
     auto *root = IORegistryEntry::getRegistryRoot();
@@ -6498,6 +6522,9 @@ static void awdlCoexPublish()
             root->setProperty("ITLAWDLCoexBaFilterOff", awdlCoexBaFilterOff);
             root->setProperty("ITLAWDLCoexBaFilterChanges", awdlCoexBaFilterChanges, 32);
             root->setProperty("ITLAWDLCoexBaBroken", awdlCoexBaFailedGen >= 0 && awdlCoexBaFailedGen == awdlCoexGeneration);
+            root->setProperty("ITLAWDLCoexControlRxEnabled", awdlControlRxEnabled());
+            root->setProperty("ITLAWDLCoexControlRxArms", awdlCoexControlRxProbe.arms, 32);
+            root->setProperty("ITLAWDLCoexControlRxCompletions", awdlCoexControlRxCompletions, 32);
             root->setProperty("ITLAWDLCoexRateStep", uint32_t(awdlCoexRateStep), 32);
             root->setProperty("ITLAWDLCoexRateUps", awdlCoexRateUps, 32);
             root->setProperty("ITLAWDLCoexRateDowns", awdlCoexRateDowns, 32);
@@ -7728,7 +7755,11 @@ awdlCoexDataPump(struct iwx_softc *sc, unsigned budget)
         auto *node = ieee80211_ref_node(ic->ic_bss);
         awdlCoexSending = true;
         awdlCoexSendingData = true;
+        awdlCoexSendingControlRx = awdlControlRxEnabled() && unicast && !mbuf_next(next) &&
+            ItlAWDL::shortTcpControlRequest(nextBytes, mbuf_len(next)) &&
+            awdlCoexPeerKnown(nextBytes + 4, awdlUptimeUS());
         const int err = iwx_tx(sc, next, node, EDCA_AC_BE, awdlCoexQueue);
+        awdlCoexSendingControlRx = false;
         awdlCoexSendingData = false;
         awdlCoexSending = false;
         if (err) {
@@ -7793,7 +7824,7 @@ awdlCoexBaRemovePeer(struct iwx_softc *sc)
     }
     if (flushErr || rmErr)
         awdlCoexBaFailedGen = gen;
-    if (awdlCoexBaFilterOff || (awdlCoexSameChannelProbe.applied || awdlCoexSameChannelProbe.restorePending)) {
+    if (awdlCoexBaFilterOff || awdlCoexControlRxLive || awdlCoexControlRxRestorePending || (awdlCoexSameChannelProbe.applied || awdlCoexSameChannelProbe.restorePending)) {
         awdlCoexBaFilterOff = false;
         awdlCoexBaFilter = ItlAWDL::BaFilterState{};
         if (awdlCoexAdded)
@@ -8246,7 +8277,7 @@ awdlCoexBaHandle(struct iwx_softc *sc)
         // took about two minutes on 2026-11-15. canProbe (and #47's same-channel window) still applies only to a
         // real receive session. -itlawdlfilterbysession keeps the old rule for an A/B.
         const bool wantOff = (awdlCoexBaFilterBySession ? receiveSession : awdlCoexBaPeerAdded) &&
-            answerNow >= awdlCoexBaProbeUntilUS;
+            answerNow >= awdlCoexBaProbeUntilUS && !awdlControlReceiveProbeWanted(sc, answerNow);
         if (wantOff != awdlCoexBaFilterOff) {
             awdlCoexBaFilter.off = wantOff;
             filterChange = true;
@@ -8256,6 +8287,10 @@ awdlCoexBaHandle(struct iwx_softc *sc)
     const bool probeWanted = awdlCoexSameChannelProbeWanted(sc, awdlUptimeUS());
     if ((awdlCoexSameChannelProbe.applied && !probeWanted) ||
         (awdlCoexSameChannelProbe.restorePending && !probeWanted))
+        filterChange = true;
+    const bool controlRxWanted = awdlControlReceiveProbeWanted(sc, awdlUptimeUS());
+    if (controlRxWanted != awdlCoexControlRxLive ||
+        (awdlCoexControlRxRestorePending && !controlRxWanted))
         filterChange = true;
     if (filterChange) {
         awdlCoexBaFilterOff = awdlCoexBaFilter.off;
@@ -10549,6 +10584,19 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                     continue;
                 const uint8_t kind = awdlCoexSlotKind[slot];
                 awdlCoexSlotKind[slot] = 0;
+                // A completion may reclaim several descriptors; only its attributed
+                // successful short request can open a lease. No firmware call here.
+                const bool controlRxComplete = awdlCoexSlotControlRx[slot].take(own && ok && kind == 2,
+                    sc->sc_generation, awdlCoexToken, awdlCoexChannel);
+                if (controlRxComplete && awdlControlRxEnabled() && awdlCoexAdded && !awdlStopping &&
+                    !awdlCoexTxHalted && awdlCoexGeneration == sc->sc_generation) {
+                    const uint64_t rxProbeNow = awdlUptimeUS();
+                    if (awdlCoexPeerKnown(awdlCoexSlotControlRx[slot].peer, rxProbeNow) && awdlControlRxQuiet(rxProbeNow)) {
+                        ++awdlCoexControlRxCompletions;
+                        (void)awdlCoexControlRxProbe.arm(awdlCoexSlotControlRx[slot].peer, rxProbeNow,
+                            sc->sc_generation, awdlCoexToken, awdlCoexChannel);
+                    }
+                }
                 const bool sameEpoch = awdlCoexBaPeerAdded && awdlCoexSlotBaPeerEpoch[slot] == awdlCoexBaPeerEpoch;
                 const bool delbaAttempt = kind == kCoexSlotDelba && sameEpoch &&
                     awdlCoexDelbaWaitGen == sc->sc_generation && awdlCoexDelbaWaitEpoch == awdlCoexBaPeerEpoch &&
@@ -12229,6 +12277,8 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac, int mo
     data->in = in;
     data->type = type;
     if (monitorQueue >= 0 && monitorQueue == awdlCoexQueue && idx >= 0 && idx < int(nitems(awdlCoexSlotKind))) {
+        awdlCoexSlotControlRx[idx].record(awdlCoexSendingControlRx && awdlCoexSendingData && !awdlCoexSendingMgmt,
+            wh->i_addr1, sc->sc_generation, awdlCoexToken, awdlCoexChannel);
         awdlCoexSlotKind[idx] = awdlCoexSendingMgmt ? awdlCoexSendingMgmt :
             awdlCoexSendingData ? (IEEE80211_IS_MULTICAST(wh->i_addr1) ? 1 : 2) : 0;
         awdlCoexSlotBaPeerEpoch[idx] = awdlCoexBaPeerEpoch;
@@ -15333,6 +15383,10 @@ awdlCoexMacSend(struct iwx_softc *sc, uint32_t action)
         awdlCoexSameChannelProbeWanted(sc, awdlUptimeUS());
     if (sameChannelProbe)
         awdlCoexSameChannelProbe.restorePending = true; // Even an uncertain open needs a later close.
+    const bool controlReceiveProbe = action != IWX_FW_CTXT_ACTION_REMOVE &&
+        awdlControlReceiveProbeWanted(sc, awdlUptimeUS());
+    if (controlReceiveProbe)
+        awdlCoexControlRxRestorePending = true;
     if (action != IWX_FW_CTXT_ACTION_REMOVE) {
         mac.mac_type = htole32(IWX_FW_MAC_TYPE_LISTENER);
         mac.tsf_id = htole32(IWX_TSF_ID_B);
@@ -15364,7 +15418,7 @@ awdlCoexMacSend(struct iwx_softc *sc, uint32_t action)
         struct ieee80211_channel *stationChan = in && in->in_phyctxt ? in->in_phyctxt->channel : nullptr;
         promiscWanted = awdlCoexFilter == 3 && !awdlCoexBaFilterOff && awdlCoexOwnChan && stationChan &&
             (ieee80211_chan2ieee(ic, awdlCoexOwnChan) != ieee80211_chan2ieee(ic, stationChan) ||
-             sameChannelProbe);
+             sameChannelProbe || controlReceiveProbe);
         mac.filter_flags = htole32(awdlCoexFilter == 0 ?
             IWX_MAC_FILTER_IN_PROMISC | IWX_MAC_FILTER_IN_CONTROL_AND_MGMT | IWX_MAC_FILTER_ACCEPT_GRP |
             IWX_MAC_FILTER_IN_BEACON | IWX_MAC_FILTER_IN_PROBE_REQUEST :
@@ -15385,6 +15439,9 @@ awdlCoexMacSend(struct iwx_softc *sc, uint32_t action)
         if (!sameChannelProbe)
             awdlCoexSameChannelProbe.restorePending = false;
         awdlCoexSameChannelProbe.noteApplied(promiscWanted && sameChannelProbe, awdlUptimeUS());
+        awdlCoexControlRxLive = promiscWanted && controlReceiveProbe;
+        if (!controlReceiveProbe)
+            awdlCoexControlRxRestorePending = false;
         awdlCoexPromiscLive = promiscWanted;
         awdlCoexPromiscUncertain = false;
     } else {
@@ -15723,6 +15780,8 @@ awdlCoexListener(struct iwx_softc *sc, bool add)
         awdlCoexMovePending = false;
         awdlCoexSameChannelProbe.noteApplied(false, awdlUptimeUS());
         awdlCoexSameChannelProbe.restorePending = false;
+        awdlCoexControlRxProbe.clear();
+        awdlCoexControlRxRestorePending = awdlCoexControlRxLive = false;
         awdlCoexPromiscLive = false;
         awdlCoexPromiscUncertain = false;
         awdlCoexBaPeerAdded = false;
@@ -20500,6 +20559,9 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         // flag -itlawdlcoexsamechprobe is still accepted and changes nothing; -itlawdlnosamechprobe turns it off.
         awdlCoexSameChannelProbe.enabled = awdlCoexBaTxEnabled &&
             !PE_parse_boot_argn("-itlawdlnosamechprobe", &dummy, sizeof(dummy));
+        awdlCoexControlRxEnabled = awdlCoexData && PE_parse_boot_argn("-itlawdlcontrolrx", &dummy, sizeof(dummy));
+        awdlCoexControlRxProbe = {};
+        awdlCoexControlRxRestorePending = awdlCoexControlRxLive = false;
         awdlCoexBaPeerPauseEnabled = awdlCoexBaTxEnabled &&
             PE_parse_boot_argn("-itlawdlcoexpeerpause", &dummy, sizeof(dummy));
         awdlCoexBaTraceEnabled = awdlCoexBaTxEnabled &&
