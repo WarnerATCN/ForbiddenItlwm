@@ -6285,6 +6285,20 @@ static bool awdlCoexPromiscUncertain; // A MAC command failed: the firmware may 
 static uint32_t awdlCoexPromiscAmbiguous, awdlCoexMacMaskSeen[4];
 // The RX descriptor's MAC context mask, valid only for the frame being handed to iwx_rx_frame directly
 // (not frames released later from a reorder buffer).
+#include <AWDLSameChannelProbe.hpp>
+static ItlAWDL::SameChannelProbe awdlCoexSameChannelProbe;
+static bool awdlCoexSameChannelProbeWanted(struct iwx_softc *sc, uint64_t now)
+{
+    if (awdlCoexFilter != 3 || !awdlCoexBaTxEnabled) return false;
+    auto *node = reinterpret_cast<struct iwx_node *>(sc->sc_ic.ic_bss);
+    const auto *station = node && node->in_phyctxt ? node->in_phyctxt->channel : nullptr;
+    const unsigned ownNumber = awdlCoexOwnChan ? ieee80211_chan2ieee(&sc->sc_ic, awdlCoexOwnChan) : 0;
+    const unsigned stationNumber = station ? ieee80211_chan2ieee(&sc->sc_ic, station) : 0;
+    return awdlCoexSameChannelProbe.wants(ownNumber, stationNumber,
+        awdlCoexBaPeerAdded && awdlCoexBaTids, awdlCoexBaTxState == kCoexBaTxAsking,
+        awdlCoexBaFilterOff, awdlCoexBaProbeUntilUS, now);
+}
+
 static bool awdlRxMacMaskValid;
 static uint8_t awdlRxMacMask;
 static void awdlCoexPeerHeard(const uint8_t *addr, uint64_t nowUS)
@@ -6328,6 +6342,14 @@ static void awdlCoexPublish()
 {
     auto *root = IORegistryEntry::getRegistryRoot();
     root->setProperty("ITLAWDLCoexAdded", awdlCoexAdded);
+    root->setProperty("ITLAWDLCoexSameChannelProbeEnabled", awdlCoexSameChannelProbe.enabled);
+    root->setProperty("ITLAWDLCoexSameChannelProbeLive", awdlCoexSameChannelProbe.applied);
+    root->setProperty("ITLAWDLCoexSameChannelProbeOpens", awdlCoexSameChannelProbe.opens, 32);
+    root->setProperty("ITLAWDLCoexSameChannelProbeCloses", awdlCoexSameChannelProbe.closes, 32);
+    root->setProperty("ITLAWDLCoexSameChannelProbeRestoreFailures", awdlCoexSameChannelProbe.restoreFailures, 32);
+    root->setProperty("ITLAWDLCoexSameChannelProbeLastUS", awdlCoexSameChannelProbe.lastUS, 64);
+    root->setProperty("ITLAWDLCoexSameChannelProbeMaxUS", awdlCoexSameChannelProbe.maxUS, 64);
+
     root->setProperty("ITLAWDLCoexAdds", awdlCoexAdds, 32);
     root->setProperty("ITLAWDLCoexRemoves", awdlCoexRemoves, 32);
     root->setProperty("ITLAWDLCoexAddsAfterRemove", awdlCoexAddsAfterRemove, 32);
@@ -7683,7 +7705,7 @@ awdlCoexBaRemovePeer(struct iwx_softc *sc)
     }
     if (flushErr || rmErr)
         awdlCoexBaFailedGen = gen;
-    if (awdlCoexBaFilterOff) {
+    if (awdlCoexBaFilterOff || (awdlCoexSameChannelProbe.applied || awdlCoexSameChannelProbe.restorePending)) {
         awdlCoexBaFilterOff = false;
         awdlCoexBaFilter = ItlAWDL::BaFilterState{};
         if (awdlCoexAdded)
@@ -8107,6 +8129,7 @@ awdlCoexBaHandle(struct iwx_softc *sc)
     }
     // Promiscuous receive off for as long as a receive BA session is open (or, with the A/B flag, the old
     // traffic hysteresis). It comes back on when the session or the peer station goes.
+    const bool filterWasOff = awdlCoexBaFilterOff;
     bool filterChange = false;
     if (awdlCoexBaFilterHysteresis) {
         filterChange = awdlCoexBaPeerAdded && awdlCoexBaTids && stillOurs() &&
@@ -8134,11 +8157,16 @@ awdlCoexBaHandle(struct iwx_softc *sc)
             filterChange = true;
         }
     }
+    // Restore expired windows even if opening failed with an uncertain firmware state.
+    const bool probeWanted = awdlCoexSameChannelProbeWanted(sc, awdlUptimeUS());
+    if ((awdlCoexSameChannelProbe.applied && !probeWanted) ||
+        (awdlCoexSameChannelProbe.restorePending && !probeWanted))
+        filterChange = true;
     if (filterChange) {
         awdlCoexBaFilterOff = awdlCoexBaFilter.off;
         ++awdlCoexBaFilterChanges;
         if (awdlCoexMacSend(sc, IWX_FW_CTXT_ACTION_MODIFY) && gen == sc->sc_generation) {
-            awdlCoexBaFilterOff = !awdlCoexBaFilterOff;
+            awdlCoexBaFilterOff = filterWasOff;
             awdlCoexBaFilter.off = awdlCoexBaFilterOff;
         }
         if (!stillOurs())
@@ -15199,6 +15227,10 @@ awdlCoexMacSend(struct iwx_softc *sc, uint32_t action)
     mac.id_and_color = htole32(IWX_FW_CMD_ID_AND_COLOR(kAwdlCoexMacId, 0));
     mac.action = htole32(action);
     bool promiscWanted = false;
+    const bool sameChannelProbe = action != IWX_FW_CTXT_ACTION_REMOVE &&
+        awdlCoexSameChannelProbeWanted(sc, awdlUptimeUS());
+    if (sameChannelProbe)
+        awdlCoexSameChannelProbe.restorePending = true; // Even an uncertain open needs a later close.
     if (action != IWX_FW_CTXT_ACTION_REMOVE) {
         mac.mac_type = htole32(IWX_FW_MAC_TYPE_LISTENER);
         mac.tsf_id = htole32(IWX_TSF_ID_B);
@@ -15229,7 +15261,8 @@ awdlCoexMacSend(struct iwx_softc *sc, uint32_t action)
         // own channel it would take the station's frames from it (iface108), so not there.
         struct ieee80211_channel *stationChan = in && in->in_phyctxt ? in->in_phyctxt->channel : nullptr;
         promiscWanted = awdlCoexFilter == 3 && !awdlCoexBaFilterOff && awdlCoexOwnChan && stationChan &&
-            ieee80211_chan2ieee(ic, awdlCoexOwnChan) != ieee80211_chan2ieee(ic, stationChan);
+            (ieee80211_chan2ieee(ic, awdlCoexOwnChan) != ieee80211_chan2ieee(ic, stationChan) ||
+             sameChannelProbe);
         mac.filter_flags = htole32(awdlCoexFilter == 0 ?
             IWX_MAC_FILTER_IN_PROMISC | IWX_MAC_FILTER_IN_CONTROL_AND_MGMT | IWX_MAC_FILTER_ACCEPT_GRP |
             IWX_MAC_FILTER_IN_BEACON | IWX_MAC_FILTER_IN_PROBE_REQUEST :
@@ -15247,9 +15280,14 @@ awdlCoexMacSend(struct iwx_softc *sc, uint32_t action)
     if (macGen != sc->sc_generation)
         return result;
     if (!result && macTok == awdlCoexToken) {
+        if (!sameChannelProbe)
+            awdlCoexSameChannelProbe.restorePending = false;
+        awdlCoexSameChannelProbe.noteApplied(promiscWanted && sameChannelProbe, awdlUptimeUS());
         awdlCoexPromiscLive = promiscWanted;
         awdlCoexPromiscUncertain = false;
     } else {
+        if (awdlCoexSameChannelProbe.applied && !sameChannelProbe)
+            ++awdlCoexSameChannelProbe.restoreFailures;
         awdlCoexPromiscUncertain = true;
     }
     return result;
@@ -15501,6 +15539,8 @@ awdlCoexListener(struct iwx_softc *sc, bool add)
         awdlCoexMultiActive = false;
         awdlCoexOwnChan = nullptr;
         awdlCoexMovePending = false;
+        awdlCoexSameChannelProbe.noteApplied(false, awdlUptimeUS());
+        awdlCoexSameChannelProbe.restorePending = false;
         awdlCoexPromiscLive = false;
         awdlCoexPromiscUncertain = false;
         awdlCoexBaPeerAdded = false;
@@ -20263,6 +20303,8 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         awdlCoexMulti = awdlCoexTx && PE_parse_boot_argn("-itlawdlcoexmulti", &dummy, sizeof(dummy));
         awdlCoexData = awdlCoexTx && PE_parse_boot_argn("-itlawdlcoexdata", &dummy, sizeof(dummy));
         awdlCoexBaTxEnabled = awdlCoexData && PE_parse_boot_argn("-itlawdlcoexbatx", &dummy, sizeof(dummy));
+        awdlCoexSameChannelProbe.enabled = awdlCoexBaTxEnabled &&
+            PE_parse_boot_argn("-itlawdlcoexsamechprobe", &dummy, sizeof(dummy));
         awdlCoexBaPeerPauseEnabled = awdlCoexBaTxEnabled &&
             PE_parse_boot_argn("-itlawdlcoexpeerpause", &dummy, sizeof(dummy));
         awdlCoexBaTraceEnabled = awdlCoexBaTxEnabled &&
