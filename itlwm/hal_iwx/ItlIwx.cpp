@@ -6100,6 +6100,11 @@ static ItlAWDL::BaFilterState awdlCoexBaFilter;
 static uint32_t awdlCoexDataRxRetry, awdlCoexRxModulation[8], awdlCoexRxWide80;
 // Unicast data rate for our frames: 0 legacy 24 Mbit/s, then HT MCS 4, 5, 7 (20 MHz, one stream). Steps
 // down after a window with over 20% failures, up after one with under 5%.
+// Opt-in policy for eligible single AWDL unicast; aggregates keep firmware rate control.
+static bool awdlCoexSingleLegacy;
+static bool awdlSingleLegacyEnabled() { return awdlCoexSingleLegacy; }
+static bool awdlCoexSingleLegacyUsed;
+static uint32_t awdlCoexSingleStatus[2][256];
 static unsigned awdlCoexRateStep;
 static uint32_t awdlCoexRateWindowOK, awdlCoexRateWindowFailed, awdlCoexRateUps, awdlCoexRateDowns;
 // Steps 4 and 5 are VHT 80 MHz, two streams, MCS 4 and 7, only while the listener is at 80 MHz.
@@ -6339,6 +6344,7 @@ static uint32_t awdlCoexPeerSequenceRejected;
 static bool awdlCoexScheduleCalibrated;
 // Per ring slot: 1 for a group data frame, 2 for unicast, so completions say whether the peer acknowledged us.
 static uint8_t awdlCoexSlotKind[IWX_MIN_256_BA_QUEUE_SIZE_GEN3];
+static uint8_t awdlCoexSlotSingleLegacy[IWX_MIN_256_BA_QUEUE_SIZE_GEN3];
 static uint32_t awdlCoexSlotBaPeerEpoch[nitems(awdlCoexSlotKind)];
 static uint8_t awdlCoexSlotToken[nitems(awdlCoexSlotKind)]; // Dialog token (ADDBA) or TID (DELBA) per slot.
 static uint16_t awdlCoexSlotEnqueueId[nitems(awdlCoexSlotKind)];
@@ -6498,6 +6504,10 @@ static void awdlCoexPublish()
             root->setProperty("ITLAWDLCoexBaFilterOff", awdlCoexBaFilterOff);
             root->setProperty("ITLAWDLCoexBaFilterChanges", awdlCoexBaFilterChanges, 32);
             root->setProperty("ITLAWDLCoexBaBroken", awdlCoexBaFailedGen >= 0 && awdlCoexBaFailedGen == awdlCoexGeneration);
+            root->setProperty("ITLAWDLCoexSingleLegacy", awdlSingleLegacyEnabled());
+            if (auto *data = OSData::withBytes(awdlCoexSingleStatus, sizeof(awdlCoexSingleStatus))) {
+                root->setProperty("ITLAWDLCoexSingleStatus", data); data->release();
+            }
             root->setProperty("ITLAWDLCoexRateStep", uint32_t(awdlCoexRateStep), 32);
             root->setProperty("ITLAWDLCoexRateUps", awdlCoexRateUps, 32);
             root->setProperty("ITLAWDLCoexRateDowns", awdlCoexRateDowns, 32);
@@ -10568,6 +10578,12 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                     ++(ok ? awdlCoexDataOK : awdlCoexDataFailed);
                 if (kind == 2) {
                     ++(ok ? awdlCoexUcastOK : awdlCoexUcastFailed);
+                    static_assert(IWX_TX_STATUS_MSK < 256, "status histogram bounds");
+                    const bool singleLegacy = awdlCoexSlotSingleLegacy[slot] != 0;
+                    ++awdlCoexSingleStatus[singleLegacy ? 1 : 0][unsigned(status)];
+                    // Attribute late completions to the mode that actually built their descriptor.
+                    // Fixed-rate test packets must not train the saved adaptive estimate.
+                    if (!singleLegacy) {
                     ++(ok ? awdlCoexRateWindowOK : awdlCoexRateWindowFailed);
                     const uint32_t window = awdlCoexRateWindowOK + awdlCoexRateWindowFailed;
                     if (window >= 64) {
@@ -10580,6 +10596,7 @@ iwx_rx_tx_cmd(struct iwx_softc *sc, struct iwx_rx_packet *pkt,
                             ++awdlCoexRateUps;
                         }
                         awdlCoexRateWindowOK = awdlCoexRateWindowFailed = 0;
+                    }
                     }
                 } else if (kind == 1) {
                     ++(ok ? awdlCoexGroupOK : awdlCoexGroupFailed);
@@ -11336,6 +11353,7 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
     uint8_t hwrate;
 
     *flags = 0;
+    awdlCoexSingleLegacyUsed = false;
     static const int awdlRateIndexes[ItlAWDL::kLegacyRateTop + 1] =
         {IWX_RATE_12M_INDEX, IWX_RATE_24M_INDEX, IWX_RATE_36M_INDEX, IWX_RATE_54M_INDEX};
     if ((ic->ic_opmode == IEEE80211_M_MONITOR && awdlDataInFlight == 3) || awdlCoexBaSendingAgg)
@@ -11372,7 +11390,9 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
         *flags |= IWX_TX_FLAGS_CMD_RATE;
         const uint8_t vhtCmdVer = iwx_lookup_cmd_ver(sc, IWX_LONG_GROUP, IWX_TX_CMD);
         const uint8_t bothAntennas = IWX_RATE_MCS_ANT_AB_MSK >> IWX_RATE_MCS_ANT_POS;
-        if (ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep >= 4 && awdlCoexRateStep < nitems(kAwdlCoexRateMcs) &&
+        const bool legacyTest = ridx == IWX_RATE_24M_INDEX && awdlSingleLegacyEnabled();
+        awdlCoexSingleLegacyUsed = legacyTest;
+        if (!legacyTest && ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep >= 4 && awdlCoexRateStep < nitems(kAwdlCoexRateMcs) &&
             awdlCoexOwnWidth == 80 && vhtCmdVer > 8 && vhtCmdVer != IWX_FW_CMD_VER_UNKNOWN &&
             (iwx_fw_valid_tx_ant(sc) & bothAntennas) == bothAntennas) {
             // VHT, 80 MHz, two streams, as dedicated mode's fixed rate for its 80 MHz sends.
@@ -11381,9 +11401,9 @@ iwx_tx_fill_cmd(struct iwx_softc *sc, struct iwx_node *in,
             ++awdlCoexVhtFrames;
             return &iwx_rates[IWX_RATE_MCS_7_INDEX];
         }
-        if (ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep >= 4)
+        if (!legacyTest && ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep >= 4)
             awdlCoexRateStep = 3; // Not at 80 MHz any more, or no VHT command format: back to HT.
-        if (ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep > 0 && awdlCoexRateStep < 4) {
+        if (!legacyTest && ridx == IWX_RATE_24M_INDEX && awdlCoexRateStep > 0 && awdlCoexRateStep < 4) {
             // A fixed HT rate, 20 MHz, one stream, long guard interval, as dedicated mode sends.
             const unsigned mcs = kAwdlCoexRateMcs[awdlCoexRateStep];
             const iwx_rate *htInfo = &iwx_rates[iwx_mcs2ridx[mcs]];
@@ -12229,6 +12249,7 @@ iwx_tx(struct iwx_softc *sc, mbuf_t m, struct ieee80211_node *ni, int ac, int mo
     data->in = in;
     data->type = type;
     if (monitorQueue >= 0 && monitorQueue == awdlCoexQueue && idx >= 0 && idx < int(nitems(awdlCoexSlotKind))) {
+        awdlCoexSlotSingleLegacy[idx] = awdlCoexSingleLegacyUsed ? 1 : 0;
         awdlCoexSlotKind[idx] = awdlCoexSendingMgmt ? awdlCoexSendingMgmt :
             awdlCoexSendingData ? (IEEE80211_IS_MULTICAST(wh->i_addr1) ? 1 : 2) : 0;
         awdlCoexSlotBaPeerEpoch[idx] = awdlCoexBaPeerEpoch;
@@ -20500,6 +20521,7 @@ iwx_attach(struct iwx_softc *sc, struct pci_attach_args *pa)
         // flag -itlawdlcoexsamechprobe is still accepted and changes nothing; -itlawdlnosamechprobe turns it off.
         awdlCoexSameChannelProbe.enabled = awdlCoexBaTxEnabled &&
             !PE_parse_boot_argn("-itlawdlnosamechprobe", &dummy, sizeof(dummy));
+        awdlCoexSingleLegacy = awdlCoexData && PE_parse_boot_argn("-itlawdlsinglelegacy", &dummy, sizeof(dummy));
         awdlCoexBaPeerPauseEnabled = awdlCoexBaTxEnabled &&
             PE_parse_boot_argn("-itlawdlcoexpeerpause", &dummy, sizeof(dummy));
         awdlCoexBaTraceEnabled = awdlCoexBaTxEnabled &&
