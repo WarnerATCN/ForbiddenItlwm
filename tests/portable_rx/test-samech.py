@@ -3,7 +3,10 @@ import subprocess,tempfile
 T=Path(__file__).resolve().parent;R=T.parents[1];s=(R/'itlwm/hal_iwx/ItlIwx.cpp').read_text();base=(T/'fixtures/same-channel-before.cpp').read_text()
 def body(text,name,end):
  a=text.index(name);b=text.index(end,a);return text[a:b]
-helper=body(s,'static bool awdlCoexSameChannelProbeWanted(', '\nstatic bool awdlRxMacMaskValid;')
+a=s.index('static bool awdlCoexSameChannelProbeWanted(');b=s.index('{',a)+1;depth=1
+while depth:
+ depth+=(s[b]=='{')-(s[b]=='}');b+=1
+helper=s[a:b]+'\n'
 method='int ItlIwx::\n'+body(s,'awdlCoexMacSend(struct iwx_softc','\n// The listener')
 oldmethod='int ItlIwx::\n'+body(base,'awdlCoexMacSend(struct iwx_softc','\n// The listener').replace('awdlCoexMacSend(', 'baselineMacSend(',1)
 a=s.index('    if (filterChange) {',s.index('awdlCoexBaHandle(struct'));b=a+len('    if (filterChange) {');depth=1

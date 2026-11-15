@@ -123,6 +123,7 @@
 #include <AWDLRegulatory.hpp>
 #include <AWDLBlockAck.hpp>
 #include <AWDLServiceMerge.hpp>
+#include <AWDLSameChannelProbe.hpp>
 
 // The firmware station for the AWDL peer, used by -itlawdlba.
 constexpr uint8_t kAwdlBaStationId = 3;
@@ -6283,9 +6284,6 @@ static uint32_t awdlCoexDataRxUcast, awdlCoexDataRxGroup, awdlCoexPromiscDropped
 static bool awdlCoexPromiscLive;      // Applied: the firmware accepted a MAC command that set it.
 static bool awdlCoexPromiscUncertain; // A MAC command failed: the firmware may hold either filter.
 static uint32_t awdlCoexPromiscAmbiguous, awdlCoexMacMaskSeen[4];
-// The RX descriptor's MAC context mask, valid only for the frame being handed to iwx_rx_frame directly
-// (not frames released later from a reorder buffer).
-#include <AWDLSameChannelProbe.hpp>
 static ItlAWDL::SameChannelProbe awdlCoexSameChannelProbe;
 static bool awdlCoexSameChannelProbeWanted(struct iwx_softc *sc, uint64_t now)
 {
@@ -6299,6 +6297,8 @@ static bool awdlCoexSameChannelProbeWanted(struct iwx_softc *sc, uint64_t now)
         awdlCoexBaFilterOff, awdlCoexBaProbeUntilUS, now);
 }
 
+// The RX descriptor's MAC context mask, valid only for the frame being handed to iwx_rx_frame directly
+// (not frames released later from a reorder buffer).
 static bool awdlRxMacMaskValid;
 static uint8_t awdlRxMacMask;
 static void awdlCoexPeerHeard(const uint8_t *addr, uint64_t nowUS)
