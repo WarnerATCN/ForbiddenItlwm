@@ -1,5 +1,7 @@
 # Same-channel management-response probe
 
+The later [A/B/A replication with gateway ping and a retained P/R sequence](SAME_CHANNEL_ABA.md) supplements the initial single-pair results below, including explicit timing, peer-identity and device-isolation limits.
+
 Run `python3 tests/portable_rx/test-samech.py` on macOS with Python3/CLT. Production-extraction tests use ASan/UBSan, compare emitted MAC commands with a beta.2 oracle while the flag is off, inject firmware restore failures, and verify unchanged RX parser/guard function hashes. No driver is loaded by this test.
 
 The only new boot flag is `-itlawdlcoexsamechprobe`, **absent/off by default**. No control-TCP window, single-rate policy, idle handoff, regional picker, sysctl, or new Bluetooth patch is included.
@@ -40,4 +42,4 @@ Reference: 247,636,698 bytes, SHA256 `a31d673c39851f0f6eb3fa53f2570cd06182b402d4
 
 Both builds passed the runtime build check (`verified`); loaded UUIDs were A `3D378C4F-DD82-306F-ADF1-3DD77D5A2F2F`, B `A57DCB05-511F-31A0-A61A-3AFFC9B5DA5E`. Initial infrastructure PHY-mode/rate reports were 802.11ac/260Mb/s in both; these are not the measured AWDL throughput.
 
-**Scope:** B's file-phase average was 4.06× A in this one ordered A/B pair. ASK time did not improve. No A/B/A replication, randomized order, RF capture of the negotiation, sleep/wake or other-adapter validation was performed. This is evidence for review of the opt-in same-channel change, not a general speed guarantee or a discovery fix. Raw logs, interface/peer addresses, personal EFI and configuration are kept out of the PR.
+**Initial-pair scope:** B's file-phase average was 4.06× A in this one ordered A/B pair. ASK time did not improve. This initial pair did not include A/B/A replication, randomized order, RF capture of the negotiation, sleep/wake or other-adapter validation. The subsequent A/B/A is documented separately above. This is evidence for review of the opt-in same-channel change, not a general speed guarantee or a discovery fix. Raw logs, interface/peer addresses, personal EFI and configuration are kept out of the PR.
