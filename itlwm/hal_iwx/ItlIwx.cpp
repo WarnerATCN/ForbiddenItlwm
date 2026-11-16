@@ -6099,14 +6099,14 @@ static uint16_t awdlCoexBaSequence;
 static ItlAWDL::BaFilterState awdlCoexBaFilter;
 // What the phone's data looks like: retries, and modulation (index = rate_n_flags mod type), 80 MHz count.
 static uint32_t awdlCoexDataRxRetry, awdlCoexRxModulation[8], awdlCoexRxWide80;
-// Unicast data rate for our frames: 0 legacy 24 Mbit/s, then HT MCS 4, 5, 7 (20 MHz, one stream). Steps
-// down after a window with over 20% failures, up after one with under 5%.
 // Opt-in bounded window; only successful attributed completions arm it.
 static bool awdlCoexControlRxEnabled;
 static bool awdlControlRxEnabled() { return awdlCoexControlRxEnabled; }
 static ItlAWDL::ControlReceiveProbe awdlCoexControlRxProbe;
 static bool awdlCoexSendingControlRx, awdlCoexControlRxRestorePending, awdlCoexControlRxLive;
 static uint32_t awdlCoexControlRxCompletions;
+// Unicast data rate for our frames: 0 legacy 24 Mbit/s, then HT MCS 4, 5, 7 (20 MHz, one stream). Steps
+// down after a window with over 20% failures, up after one with under 5%.
 static unsigned awdlCoexRateStep;
 static uint32_t awdlCoexRateWindowOK, awdlCoexRateWindowFailed, awdlCoexRateUps, awdlCoexRateDowns;
 // Steps 4 and 5 are VHT 80 MHz, two streams, MCS 4 and 7, only while the listener is at 80 MHz.

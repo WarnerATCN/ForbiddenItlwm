@@ -2,14 +2,18 @@ from pathlib import Path
 import subprocess,tempfile
 T=Path(__file__).resolve().parent;R=T.parents[1];s=(R/'itlwm/hal_iwx/ItlIwx.cpp').read_text()
 def part(a,b):return s[s.index(a):s.index(b,s.index(a))]
+a=s.index('static bool awdlCoexSameChannelProbeWanted(');b=s.index('{',a)+1;depth=1
+while depth:depth+=(s[b]=='{')-(s[b]=='}');b+=1
+helper=s[a:b]+'\n'
 method='int ItlIwx::\n'+part('awdlCoexMacSend(struct iwx_softc','\n// The listener')
 a=s.index('    if (filterChange) {',s.index('awdlCoexBaHandle(struct'));b=a+len('    if (filterChange) {');depth=1
 while depth:depth+=(s[b]=='{')-(s[b]=='}');b+=1
 restore=s[a:b]
-force=part('    const bool controlRxWanted =','    if (filterChange) {')
+force=part('    // Restore expired windows even if opening failed with an uncertain firmware state.','    if (filterChange) {')
 caller='struct { bool off=false; } awdlCoexBaFilter; static unsigned awdlCoexBaFilterChanges;\nvoid ItlIwx::runFilterChange(iwx_softc *sc,bool wanted,bool always){const bool filterWasOff=awdlCoexBaFilterOff;bool filterChange=always||wanted!=filterWasOff;awdlCoexBaFilter.off=wanted;const int gen=sc->sc_generation;auto stillOurs=[&](){return gen==sc->sc_generation;};\n'+force+restore+'\n}\n'
 p=r'''
 
+#include <AWDLSameChannelProbe.hpp>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -34,6 +38,7 @@ static uint32_t awdlCoexToken=1;static unsigned awdlCoexFilter=3;static uint8_t 
 static uint8_t awdlCoexAddr[6]={2,1,2,3,4,6},etherbroadcastaddr[6]={255,255,255,255,255,255};
 static ieee80211_channel own;static ieee80211_channel *awdlCoexOwnChan=&own;
 static bool awdlCoexControlRxLive;
+static ItlAWDL::SameChannelProbe awdlCoexSameChannelProbe;
 static uint64_t nowUS=1000000,awdlCoexBaProbeUntilUS=1250000;
 static uint64_t awdlUptimeUS(){return nowUS;}
 static void iwx_ack_rates(iwx_softc*,iwx_node*,int *cck,int *ofdm){*cck=15;*ofdm=21;}
@@ -43,17 +48,19 @@ static uint64_t controlDeadline=0;
 static bool awdlControlReceiveProbeWanted(iwx_softc*,uint64_t now){return controlWantedFlag&&now<controlDeadline;}
 class ItlIwx {public:int awdlCoexMacSend(iwx_softc*,uint32_t);int baselineMacSend(iwx_softc*,uint32_t);void runFilterChange(iwx_softc*,bool,bool);int iwx_send_cmd_pdu(iwx_softc *s,int id,int flags,unsigned size,void *cmd){assert(id==IWX_MAC_CONTEXT_CMD && !flags && size==sizeof(iwx_mac_ctx_cmd));submitted=*static_cast<iwx_mac_ctx_cmd*>(cmd);if(injected==2)++s->sc_generation;if(injected==3)++awdlCoexToken;return injected==1?5:0;}};
 
-''' + method + caller + r'''
+''' + helper + method + caller + r'''
 
 int main(){iwx_softc sc;ItlIwx driver;Phy phy;ieee80211_node node;ieee80211_channel station;phy.channel=&station;node.in_phyctxt=&phy;sc.sc_ic.ic_bss=&node;
  unsigned cases=0;
- auto reset=[&](){injected=0;nowUS=1000000;awdlCoexFilter=3;awdlCoexBaFilterOff=false;awdlCoexControlRxLive=false;awdlCoexControlRxRestorePending=false;controlWantedFlag=true;controlDeadline=1250000;};
+ auto reset=[&](){injected=0;awdlCoexSameChannelProbe={};awdlCoexBaProbeUntilUS=1250000;nowUS=1000000;awdlCoexFilter=3;awdlCoexBaFilterOff=false;awdlCoexControlRxLive=false;awdlCoexControlRxRestorePending=false;controlWantedFlag=true;controlDeadline=1250000;};
  for(bool failOpen:{false,true})for(bool failClose:{false,true}){reset();injected=failOpen?1:0;driver.awdlCoexMacSend(&sc,2);assert(awdlCoexControlRxRestorePending);assert(awdlCoexControlRxLive==!failOpen);nowUS=controlDeadline;injected=failClose?1:0;driver.runFilterChange(&sc,false,false);assert(awdlCoexControlRxRestorePending==failClose);if(failClose){injected=0;driver.runFilterChange(&sc,false,false);}assert(!awdlCoexControlRxLive&&!awdlCoexControlRxRestorePending);++cases;}
  for(int failure:{2,3}){reset();injected=failure;driver.awdlCoexMacSend(&sc,2);assert(!awdlCoexControlRxLive&&awdlCoexControlRxRestorePending);nowUS=controlDeadline;injected=0;driver.runFilterChange(&sc,false,false);assert(!awdlCoexControlRxRestorePending);++cases;}
  for(bool oldOff:{false,true})for(bool wanted:{false,true})for(bool always:{false,true})for(bool fail:{false,true}){reset();controlWantedFlag=false;awdlCoexBaFilterOff=oldOff;injected=fail?1:0;driver.runFilterChange(&sc,wanted,always);assert(awdlCoexBaFilterOff==(fail?oldOff:wanted));assert(awdlCoexBaFilter.off==awdlCoexBaFilterOff);++cases;}
+ // Expiring one lease must keep the other's receive bits, then restore both.
+ for(bool controlFirst:{false,true})for(bool failClose:{false,true}){reset();awdlCoexSameChannelProbe.enabled=true;assert(!driver.awdlCoexMacSend(&sc,2));assert(awdlCoexControlRxLive&&awdlCoexSameChannelProbe.applied);nowUS=1100000;if(controlFirst)controlDeadline=nowUS;else awdlCoexBaProbeUntilUS=nowUS;driver.runFilterChange(&sc,false,true);assert(submitted.filter_flags==7);assert(awdlCoexControlRxLive==!controlFirst);assert(awdlCoexSameChannelProbe.applied==controlFirst);nowUS=1250000;injected=failClose?1:0;driver.runFilterChange(&sc,false,true);if(failClose){assert(awdlCoexPromiscUncertain);injected=0;driver.runFilterChange(&sc,false,false);}assert(!awdlCoexControlRxLive&&!awdlCoexControlRxRestorePending&&!awdlCoexSameChannelProbe.applied&&!awdlCoexSameChannelProbe.restorePending);assert(submitted.filter_flags==4);++cases;}
  printf("PASS %u production control-window failed-open/failed-close/retry/token/generation/rollback cases\n",cases);
 }
 
 '''
 with tempfile.TemporaryDirectory() as d:
- c=Path(d)/'check.cpp';c.write_text(p);exe=Path(d)/'check';subprocess.run(['xcrun','clang++','-std=c++14','-fsanitize=address,undefined',str(c),'-o',str(exe)],check=True);subprocess.run([str(exe)],check=True)
+ c=Path(d)/'check.cpp';c.write_text(p);exe=Path(d)/'check';subprocess.run(['xcrun','clang++','-std=c++14','-fsanitize=address,undefined','-I'+str(R/'include'),str(c),'-o',str(exe)],check=True);subprocess.run([str(exe)],check=True)

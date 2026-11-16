@@ -44,7 +44,7 @@ static uint64_t nowUS=1000000,awdlCoexBaProbeUntilUS=1250000;
 static uint64_t awdlUptimeUS(){return nowUS;}
 static void iwx_ack_rates(iwx_softc*,iwx_node*,int *cck,int *ofdm){*cck=15;*ofdm=21;}
 static int injected; static iwx_mac_ctx_cmd submitted;
-static bool controlWantedFlag=false,awdlCoexControlRxRestorePending=false;
+static bool controlWantedFlag=false,awdlCoexControlRxRestorePending=false,awdlCoexControlRxLive=false;
 static uint64_t controlDeadline=0;
 static bool awdlControlReceiveProbeWanted(iwx_softc*,uint64_t now){return controlWantedFlag&&now<controlDeadline;}
 class ItlIwx {public:int awdlCoexMacSend(iwx_softc*,uint32_t);int baselineMacSend(iwx_softc*,uint32_t);void runFilterChange(iwx_softc*,bool,bool);int iwx_send_cmd_pdu(iwx_softc *s,int id,int flags,unsigned size,void *cmd){assert(id==IWX_MAC_CONTEXT_CMD && !flags && size==sizeof(iwx_mac_ctx_cmd));submitted=*static_cast<iwx_mac_ctx_cmd*>(cmd);if(injected==2)++s->sc_generation;if(injected==3)++awdlCoexToken;return injected==1?5:0;}};
